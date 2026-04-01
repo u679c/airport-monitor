@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>机场节点稳定性面板</title>
+    <link id="themeStylesheet" rel="stylesheet" href="/static/themes/dark.css" />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <main class="layout">
+      <section class="panel hero">
+        <div class="tag">AIRPORT MONITOR</div>
+        <h1>机场节点稳定性面板</h1>
+        <p>定时检测订阅节点 TCP 联通性，统计可用率和延迟。</p>
+        <div class="actions">
+          <select id="themeSelect" class="theme-select">
+            <option value="dark">深色模式</option>
+            <option value="light">浅色模式</option>
+          </select>
+          <button id="runOnceBtn" class="primary">立即检测</button>
+          <button id="refreshBtn" class="ghost">刷新数据</button>
+        </div>
+        <div class="stats" id="stats"></div>
+      </section>
+
+      <section class="panel side">
+        <div class="row-item">
+          <span>最后检测</span>
+          <b id="lastCheck">-</b>
+        </div>
+        <div class="row-item">
+          <span>下一轮检测</span>
+          <b id="nextCheck">-</b>
+        </div>
+        <div class="row-item">
+          <span>运行状态</span>
+          <b id="runningState">空闲</b>
+        </div>
+        <div class="row-item">
+          <span>错误信息</span>
+          <b id="errorText">无</b>
+        </div>
+        <div class="legend">
+          <i class="dot online"></i>在线
+          <i class="dot normal"></i>一般
+          <i class="dot slow"></i>偏慢
+          <i class="dot offline"></i>离线
+        </div>
+      </section>
+
+      <section class="panel config" id="configPanel">
+        <div class="panel-head">
+          <h2>检测设置</h2>
+          <button id="toggleConfigBtn" class="ghost collapse-btn" type="button">-</button>
+        </div>
+        <div class="config-body" id="configBody">
+          <div class="form-grid">
+          <label>订阅链接
+            <input id="subscription_url" placeholder="https://..." />
+          </label>
+          <label>检测周期(秒)
+            <input id="interval_sec" type="number" min="10" value="60" />
+          </label>
+          <label>超时(毫秒)
+            <input id="timeout_ms" type="number" min="100" value="5000" />
+          </label>
+          <label>并发数量
+            <input id="concurrency" type="number" min="1" value="10" />
+          </label>
+          <label>最多节点
+            <input id="max_nodes" type="number" min="1" value="100" />
+          </label>
+          </div>
+          <button id="saveConfigBtn" class="primary">保存配置</button>
+        </div>
+      </section>
+
+      <section class="panel nodes">
+        <div class="nodes-head">
+          <h2>节点状态（最近24小时）</h2>
+          <div class="node-filter">
+            <input id="nodeFilterInput" placeholder="按节点名称筛选..." />
+            <button id="clearFilterBtn" class="ghost">清除筛选</button>
+          </div>
+        </div>
+        <div id="nodeList" class="node-list"></div>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

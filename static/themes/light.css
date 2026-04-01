@@ -1,0 +1,29 @@
+:root {
+  --bg: #edf4ff;
+  --bg2: #f8fbff;
+  --bg-accent: #c8dcff;
+  --line: #c7d8ef;
+  --text: #1c314d;
+  --muted: #5c7597;
+
+  --panel-bg: rgba(255, 255, 255, 0.9);
+  --card-bg: #f5f9ff;
+  --node-card-bg: #f8fbff;
+  --input-bg: #ffffff;
+  --bar-empty: #d7e3f3;
+
+  --tag-text: #0b7f4f;
+  --tag-bg: rgba(32, 208, 122, 0.18);
+
+  --button-text: #ffffff;
+  --primary-1: #1fb970;
+  --primary-2: #0f9f5f;
+  --primary-text: #f4fff8;
+  --ghost-bg: #dfe9f7;
+  --ghost-text: #2f4f73;
+
+  --green: #1bb36a;
+  --yellow: #d29a1a;
+  --orange: #df8310;
+  --red: #d94856;
+}
