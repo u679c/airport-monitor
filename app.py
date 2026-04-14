@@ -22,6 +22,8 @@ app = Flask(__name__)
 CONFIG_FILE = Path("monitor_config.json")
 SQLITE_FILE = Path("monitor.db")
 CONFIG_KEYS = ["subscription_url", "interval_sec", "timeout_ms", "concurrency", "max_nodes"]
+LATENCY_WINDOW_SEC = 20 * 60
+OFFLINE_LATENCY_MS = 5000.0
 
 
 @dataclass
@@ -143,7 +145,7 @@ class Database:
         with self.lock:
             conn = self._connect()
             cur = conn.cursor()
-            latency_values = [n["latency_ms"] for n in nodes if n.get("latency_ms") is not None]
+            latency_values = [node_latency_for_average(n) for n in nodes if node_latency_for_average(n) is not None]
             online = sum(1 for n in nodes if n["status"] == "online")
             normal = sum(1 for n in nodes if n["status"] == "normal")
             slow = sum(1 for n in nodes if n["status"] == "slow")
@@ -179,7 +181,7 @@ class Database:
                         int(n["port"]),
                         n["protocol"],
                         n["status"],
-                        n["latency_ms"],
+                        n.get("raw_latency_ms", n.get("latency_ms")),
                         n.get("error"),
                         n.get("success_rate", 0.0),
                         json.dumps(n.get("history", []), ensure_ascii=False),
@@ -235,7 +237,8 @@ class Database:
                         "port": int(row["port"]),
                         "protocol": row["protocol"],
                         "status": row["status"],
-                        "latency_ms": float(row["latency_ms"]) if row["latency_ms"] is not None else None,
+                        "raw_latency_ms": float(row["latency_ms"]) if row["latency_ms"] is not None else None,
+                        "latency_ms": None,
                         "error": row["error_msg"],
                         "success_rate": calc_success_rate(history),
                         "history": history,
@@ -305,7 +308,8 @@ class Database:
                         "port": int(row["port"]),
                         "protocol": row["protocol"],
                         "status": row["status"],
-                        "latency_ms": float(row["latency_ms"]) if row["latency_ms"] is not None else None,
+                        "raw_latency_ms": float(row["latency_ms"]) if row["latency_ms"] is not None else None,
+                        "latency_ms": None,
                         "error": row["node_error"],
                         "history": [],
                         "success_rate": 0.0,
@@ -314,16 +318,23 @@ class Database:
                     nodes_map[key] = node
 
                 node["status"] = row["status"]
-                node["latency_ms"] = float(row["latency_ms"]) if row["latency_ms"] is not None else None
+                node["raw_latency_ms"] = float(row["latency_ms"]) if row["latency_ms"] is not None else None
                 node["error"] = row["node_error"]
                 node["last_check"] = point_ts
-                node["history"].append({"ts": point_ts, "status": row["status"]})
+                node["history"].append(
+                    {
+                        "ts": point_ts,
+                        "status": row["status"],
+                        "latency_ms": float(row["latency_ms"]) if row["latency_ms"] is not None else None,
+                    }
+                )
 
             nodes: list[dict[str, Any]] = []
             for n in nodes_map.values():
                 history = prune_history(normalize_history(n.get("history", []), fallback_ts=now_ts), now_ts)
                 n["history"] = history
                 n["success_rate"] = calc_success_rate(history)
+                n["latency_ms"] = calc_window_avg_latency(history, now_ts)
                 nodes.append(n)
 
             nodes.sort(key=lambda x: ((x["latency_ms"] is None), x["latency_ms"] or 999999))
@@ -367,7 +378,7 @@ def normalize_history(raw_history: Any, fallback_ts: float) -> list[dict[str, An
     normalized: list[dict[str, Any]] = []
     for item in raw_history:
         if isinstance(item, str):
-            normalized.append({"ts": fallback_ts, "status": item})
+            normalized.append({"ts": fallback_ts, "status": item, "latency_ms": None})
             continue
         if not isinstance(item, dict):
             continue
@@ -378,7 +389,14 @@ def normalize_history(raw_history: Any, fallback_ts: float) -> list[dict[str, An
             ts = float(item.get("ts"))
         except Exception:
             ts = fallback_ts
-        normalized.append({"ts": ts, "status": status})
+        raw_latency = item.get("latency_ms")
+        latency_ms = None
+        if raw_latency is not None:
+            try:
+                latency_ms = float(raw_latency)
+            except Exception:
+                latency_ms = None
+        normalized.append({"ts": ts, "status": status, "latency_ms": latency_ms})
     return normalized
 
 
@@ -393,6 +411,51 @@ def calc_success_rate(history: list[dict[str, Any]]) -> float:
         return 0.0
     ok_count = sum(1 for x in history if x.get("status") != "offline")
     return round(ok_count / len(history) * 100, 1)
+
+
+def calc_window_avg_latency(
+    history: list[dict[str, Any]],
+    now_ts: float,
+    window_sec: int = LATENCY_WINDOW_SEC,
+    offline_latency_ms: float = OFFLINE_LATENCY_MS,
+) -> float | None:
+    if not history:
+        return None
+    cutoff = now_ts - window_sec
+    values: list[float] = []
+    for point in history:
+        try:
+            ts = float(point.get("ts", 0))
+        except Exception:
+            continue
+        if ts < cutoff:
+            continue
+        status = str(point.get("status", "")).strip()
+        if status == "offline":
+            values.append(offline_latency_ms)
+            continue
+        latency = point.get("latency_ms")
+        if latency is None:
+            continue
+        try:
+            values.append(float(latency))
+        except Exception:
+            continue
+    if not values:
+        return None
+    return round(sum(values) / len(values), 2)
+
+
+def node_latency_for_average(node: dict[str, Any]) -> float | None:
+    latency = node.get("latency_ms")
+    if latency is not None:
+        try:
+            return float(latency)
+        except Exception:
+            return None
+    if str(node.get("status", "")).strip() == "offline":
+        return OFFLINE_LATENCY_MS
+    return None
 
 
 def build_node_key(name: Any, host: Any, port: Any) -> str:
@@ -620,7 +683,8 @@ def run_check_once(target_keys: set[str] | None = None) -> None:
                         "port": node.port,
                         "protocol": node.protocol,
                         "status": classify(latency, ok),
-                        "latency_ms": round(latency, 2) if latency is not None else None,
+                        "raw_latency_ms": round(latency, 2) if latency is not None else None,
+                        "latency_ms": None,
                         "error": err,
                         "last_check": now,
                     }
@@ -637,10 +701,17 @@ def run_check_once(target_keys: set[str] | None = None) -> None:
             if old and isinstance(old.get("history"), list):
                 history = normalize_history(old["history"], fallback_ts=now)
             history = prune_history(history, now)
-            history.append({"ts": now, "status": result["status"]})
+            history.append(
+                {
+                    "ts": now,
+                    "status": result["status"],
+                    "latency_ms": result.get("raw_latency_ms"),
+                }
+            )
             history = prune_history(history, now)
             result["history"] = history
             result["success_rate"] = calc_success_rate(history)
+            result["latency_ms"] = calc_window_avg_latency(history, now)
             detected_nodes.append(result)
 
         if target_keys:
@@ -650,6 +721,13 @@ def run_check_once(target_keys: set[str] | None = None) -> None:
             new_nodes = list(merged_map.values())
         else:
             new_nodes = detected_nodes
+
+        for item in new_nodes:
+            history = normalize_history(item.get("history", []), fallback_ts=now)
+            history = prune_history(history, now)
+            item["history"] = history
+            item["success_rate"] = calc_success_rate(history)
+            item["latency_ms"] = calc_window_avg_latency(history, now)
         new_nodes.sort(key=lambda x: ((x["latency_ms"] is None), x["latency_ms"] or 999999))
 
         with state.lock:
@@ -676,7 +754,7 @@ def run_check_once(target_keys: set[str] | None = None) -> None:
         for old in affected_nodes:
             history = normalize_history(old.get("history", []), fallback_ts=finished)
             history = prune_history(history, finished)
-            history.append({"ts": finished, "status": "offline"})
+            history.append({"ts": finished, "status": "offline", "latency_ms": None})
             history = prune_history(history, finished)
             offline_nodes.append(
                 {
@@ -685,7 +763,8 @@ def run_check_once(target_keys: set[str] | None = None) -> None:
                     "port": old.get("port"),
                     "protocol": old.get("protocol"),
                     "status": "offline",
-                    "latency_ms": None,
+                    "raw_latency_ms": None,
+                    "latency_ms": calc_window_avg_latency(history, finished),
                     "error": error_text,
                     "last_check": finished,
                     "history": history,
@@ -700,6 +779,12 @@ def run_check_once(target_keys: set[str] | None = None) -> None:
                 state.nodes = list(merged_map.values())
             else:
                 state.nodes = offline_nodes
+            for item in state.nodes:
+                history = normalize_history(item.get("history", []), fallback_ts=finished)
+                history = prune_history(history, finished)
+                item["history"] = history
+                item["success_rate"] = calc_success_rate(history)
+                item["latency_ms"] = calc_window_avg_latency(history, finished)
             state.last_error = error_text
             state.last_check = finished
             state.next_check = finished + int(cfg.get("interval_sec", 60))
@@ -748,7 +833,7 @@ def api_status() -> Any:
     normal = sum(1 for n in nodes if n["status"] == "normal")
     slow = sum(1 for n in nodes if n["status"] == "slow")
     offline = sum(1 for n in nodes if n["status"] == "offline")
-    latency_values = [n["latency_ms"] for n in nodes if n["latency_ms"] is not None]
+    latency_values = [node_latency_for_average(n) for n in nodes if node_latency_for_average(n) is not None]
     avg_latency = round(sum(latency_values) / len(latency_values), 2) if latency_values else None
 
     return jsonify(
@@ -765,6 +850,8 @@ def api_status() -> Any:
                 "slow": slow,
                 "offline": offline,
                 "avg_latency_ms": avg_latency,
+                "latency_window_sec": LATENCY_WINDOW_SEC,
+                "offline_latency_ms": OFFLINE_LATENCY_MS,
             },
             "nodes": nodes,
         }

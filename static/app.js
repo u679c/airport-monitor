@@ -69,11 +69,14 @@ function saveFilter() {
 }
 
 function renderStats(summary) {
+  const windowMinutes = Math.max(1, Math.round(Number(summary.latency_window_sec || 0) / 60));
+  const offlinePenalty = Number(summary.offline_latency_ms || 5000);
+  const avgLabel = `${windowMinutes}分钟平均延迟`;
   const cards = [
     ["节点总数", summary.total],
     ["可用节点", summary.online + summary.normal + summary.slow],
     ["离线节点", summary.offline],
-    ["平均延迟", summary.avg_latency_ms == null ? "-" : `${summary.avg_latency_ms} ms`],
+    [avgLabel, summary.avg_latency_ms == null ? "-" : `${summary.avg_latency_ms} ms`],
   ];
   refs.stats.innerHTML = cards
     .map(([k, v]) => `<div class="stat-card"><span>${k}</span><b>${v}</b></div>`)
